@@ -24,6 +24,7 @@ type Server struct {
 	config        *ServerConfig
 	user          *protocol.MemoryUser
 	policyManager policy.Manager
+	cone          bool
 }
 
 // NewServer create a new Shadowsocks server.
@@ -42,6 +43,7 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 		config:        config,
 		user:          mUser,
 		policyManager: v.GetFeature(policy.ManagerType()).(policy.Manager),
+		cone:          ctx.Value("cone").(bool),
 	}
 
 	return s, nil
@@ -77,6 +79,15 @@ func (s *Server) handlerUDPPayload(ctx context.Context, conn internet.Connection
 		}
 
 		payload := packet.Payload
+
+		if payload.UDP != nil {
+			request = &protocol.RequestHeader{
+				User:    request.User,
+				Address: payload.UDP.Address,
+				Port:    payload.UDP.Port,
+			}
+		}
+
 		data, err := EncodeUDPPacket(request, payload.Bytes())
 		payload.Release()
 		if err != nil {
@@ -93,6 +104,8 @@ func (s *Server) handlerUDPPayload(ctx context.Context, conn internet.Connection
 		panic("no inbound metadata")
 	}
 	inbound.User = s.user
+
+	var dest *net.Destination
 
 	reader := buf.NewPacketReader(conn)
 	for {
@@ -117,21 +130,28 @@ func (s *Server) handlerUDPPayload(ctx context.Context, conn internet.Connection
 				continue
 			}
 
+			destination := request.Destination()
+
 			currentPacketCtx := ctx
-			dest := request.Destination()
 			if inbound.Source.IsValid() {
 				currentPacketCtx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
 					From:   inbound.Source,
-					To:     dest,
+					To:     destination,
 					Status: log.AccessAccepted,
 					Reason: "",
 					Email:  request.User.Email,
 				})
 			}
-			newError("tunnelling request to ", dest).WriteToLog(session.ExportIDToError(currentPacketCtx))
+			newError("tunnelling request to ", destination).WriteToLog(session.ExportIDToError(currentPacketCtx))
+
+			data.UDP = &destination
+
+			if !s.cone || dest == nil {
+				dest = &destination
+			}
 
 			currentPacketCtx = protocol.ContextWithRequestHeader(currentPacketCtx, request)
-			udpServer.Dispatch(currentPacketCtx, dest, data)
+			udpServer.Dispatch(currentPacketCtx, *dest, data)
 		}
 	}
 
