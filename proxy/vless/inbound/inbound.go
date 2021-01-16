@@ -109,6 +109,17 @@ func New(ctx context.Context, config *Config, dc dns.Client) (*Handler, error) {
 				}
 			*/
 		}
+		if handler.fallbacks[""] != nil {
+			for name, apfb := range handler.fallbacks {
+				if name != "" {
+					for alpn := range handler.fallbacks[""] {
+						if apfb[alpn] == nil {
+							apfb[alpn] = make(map[string]*Fallback)
+						}
+					}
+				}
+			}
+		}
 		for _, apfb := range handler.fallbacks {
 			if apfb[""] != nil {
 				for alpn, pfb := range apfb {
@@ -126,9 +137,6 @@ func New(ctx context.Context, config *Config, dc dns.Client) (*Handler, error) {
 			for name, apfb := range handler.fallbacks {
 				if name != "" {
 					for alpn, pfb := range handler.fallbacks[""] {
-						if apfb[alpn] == nil {
-							apfb[alpn] = make(map[string]*Fallback)
-						}
 						for path, fb := range pfb {
 							if apfb[alpn][path] == nil {
 								apfb[alpn][path] = fb
@@ -226,14 +234,14 @@ func (h *Handler) Process(ctx context.Context, network net.Network, connection i
 			}
 
 			if len(napfb) > 1 || napfb[""] == nil {
-				if napfb[name] == nil {
-					generic := "*"
-					if index := strings.IndexByte(name, '.'); index != -1 {
-						generic += name[index:]
+				if name != "" && napfb[name] == nil {
+					match := ""
+					for n := range napfb {
+						if n != "" && strings.Contains(name, n) && len(n) > len(match) {
+							match = n
+						}
 					}
-					if napfb[generic] != nil {
-						name = generic
-					}
+					name = match
 				}
 			}
 
